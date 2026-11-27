@@ -82,13 +82,15 @@ class Client:
         except urllib.error.HTTPError as e:
             return e.code, dict(e.headers), e.read()
 
-    def api(self, route, body=None, query=None, method=None, files=None, csrf=True):
+    def api(self, route, body=None, query=None, method=None, files=None, csrf=True, fields=None):
         path = "/api.php?r=" + route + ("&" + urllib.parse.urlencode(query) if query else "")
         headers = {"Accept": "application/json"}
         data = None
         if files is not None:
             boundary = uuid.uuid4().hex
             buf = io.BytesIO()
+            for name, value in (fields or {}).items():
+                buf.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode())
             for name, (filename, content, ctype) in files.items():
                 buf.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
                           f"Content-Type: {ctype}\r\n\r\n".encode())
@@ -520,6 +522,277 @@ class SiteTests(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertIn("frame-ancestors 'self'", hdrs["Content-Security-Policy"])
         self.assertIn(b"assets/app.js", body)
+
+
+WEBM_VOICE = (b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01\x42\xf2\x81\x04\x42\xf3\x81\x08"
+              b"\x42\x82\x84webm\x42\x87\x81\x04\x42\x85\x81\x02" + b"\x00" * 64)
+
+
+def users(n, prefix="User"):
+    out = []
+    for i in range(n):
+        c = Client()
+        c.login(rand_phone(), f"{prefix} {i}")
+        out.append(c)
+    return out
+
+
+def chat_of(client, cid):
+    return client.api("chats/one", query={"id": cid})[1]["chat"]
+
+
+def history(client, cid):
+    st, r = client.api("messages", query={"chat": cid})
+    return r["messages"] if st == 200 else None
+
+
+class GroupTests(unittest.TestCase):
+    def test_group_lifecycle(self):
+        a, b, c, d = users(4, "Member")
+        st, r = a.api("groups/create", {"title": "Team <b>", "user_ids": [b.user["id"], c.user["id"], 999999]})
+        self.assertEqual(st, 200, r)
+        g = r["chat"]
+        cid = g["id"]
+        self.assertEqual((g["type"], g["title"], g["members_count"], g["my_role"]), ("group", "Team <b>", 3, "admin"))
+        self.assertEqual(a.api("groups/create", {"title": "", "user_ids": [b.user["id"]]})[0], 422)
+        self.assertEqual(a.api("groups/create", {"title": "Alone", "user_ids": []})[0], 422)
+
+        self.assertIn(cid, [x["id"] for x in b.api("chats")[1]["chats"]], "members see the new group right away")
+        self.assertEqual(history(a, cid)[0]["text"], "You created group “Team <b>”")
+        self.assertEqual(history(b, cid)[0]["text"], "Member 0 created group “Team <b>”")
+
+        first = a.api("messages/send", {"chat": cid, "body": "before D joined"})[1]["message"]
+        self.assertEqual(b.api("groups/update", {"chat": cid, "title": "Hijack"})[0], 403, "only admins edit the group")
+        st, info = a.api("groups/update", {"chat": cid, "title": "Team", "description": "Our shop crew"})
+        self.assertEqual((info["chat"]["title"], info["chat"]["description"]), ("Team", "Our shop crew"))
+
+        st, info = a.api("groups/add", {"chat": cid, "user_ids": [d.user["id"]]})
+        self.assertEqual(len(info["members"]), 4)
+        self.assertEqual(info["members"][0]["role"], "admin")
+        dh = history(d, cid)
+        self.assertNotIn(first["id"], [m["id"] for m in dh], "new members don't see older messages")
+        self.assertEqual(dh[-1]["text"], "Member 0 added you")
+
+        a.api("groups/admin", {"chat": cid, "user_id": b.user["id"], "admin": True})
+        st, info = b.api("groups/remove", {"chat": cid, "user_id": c.user["id"]})
+        self.assertEqual(st, 200, info)
+        self.assertEqual(len(info["members"]), 3)
+        cc = chat_of(c, cid)
+        self.assertFalse(cc["active"])
+        self.assertEqual(c.api("messages/send", {"chat": cid, "body": "still here?"})[0], 403)
+        after = a.api("messages/send", {"chat": cid, "body": "after C left"})[1]["message"]
+        self.assertNotIn(after["id"], [m["id"] for m in history(c, cid)], "removed members stop receiving messages")
+        _, cp = c.api("poll", query={"since": first["id"], "rsince": 0})
+        self.assertNotIn(after["id"], [m["id"] for m in cp["messages"]])
+        self.assertEqual(c.api("chats/delete", {"chat": cid})[0], 200, "a group you left can be deleted")
+
+        # read receipts in groups: "read" only when everyone has read
+        b.api("chats/read", {"chat": cid, "upto": after["id"]})
+        self.assertLess(chat_of(a, cid)["peer_read_id"], after["id"])
+        d.api("chats/read", {"chat": cid, "upto": after["id"]})
+        self.assertGreaterEqual(chat_of(a, cid)["peer_read_id"], after["id"])
+
+        # when the last admin leaves... b is still admin, so make a the only admin first
+        a.api("groups/admin", {"chat": cid, "user_id": b.user["id"], "admin": False})
+        st, r = a.api("groups/leave", {"chat": cid})
+        self.assertEqual(st, 200)
+        self.assertFalse(r["chat"]["active"])
+        _, info = b.api("chats/info", query={"id": cid})
+        self.assertIn("admin", [m["role"] for m in info["members"]], "someone is promoted when the last admin leaves")
+        self.assertEqual(a.api("groups/add", {"chat": cid, "user_ids": [c.user["id"]]})[0], 403)
+
+        outsider = users(1, "Out")[0]
+        self.assertEqual(outsider.api("chats/info", query={"id": cid})[0], 404)
+        self.assertEqual(outsider.api("messages/send", {"chat": cid, "body": "x"})[0], 404)
+
+
+class MediaTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.a, cls.b, cls.c = users(3, "Media")
+        cls.cid = cls.a.api("chats/open", {"user_id": cls.b.user["id"]})[1]["chat"]["id"]
+
+    def upload(self, client, cid, filename, content, ctype, kind, **fields):
+        return client.api("messages/upload", files={"file": (filename, content, ctype)}, fields={"chat": cid, "kind": kind, **fields})
+
+    def fetch(self, client, url, headers=None):
+        return client.raw("/" + url, headers=headers or {})
+
+    def test_photo_voice_file_location(self):
+        a, b, c, cid = self.a, self.b, self.c, self.cid
+        st, r = self.upload(a, cid, "p.png", png_bytes(), "image/png", "image", caption="Our new cake")
+        self.assertEqual(st, 200, r)
+        m = r["message"]
+        self.assertEqual((m["kind"], m["body"], m["media"]["w"], m["media"]["h"]), ("image", "Our new cake", 1, 1))
+        st, hdrs, body = self.fetch(b, m["media"]["url"])
+        self.assertEqual((st, hdrs["Content-Type"]), (200, "image/png"))
+        self.assertIn("sandbox", hdrs["Content-Security-Policy"])
+        self.assertEqual(self.fetch(c, m["media"]["url"])[0], 404, "people outside the chat can't open its files")
+        self.assertEqual(self.fetch(Client(), m["media"]["url"])[0], 403)
+
+        st, hdrs, part = self.fetch(b, m["media"]["url"], {"Range": "bytes=0-9"})
+        self.assertEqual((st, len(part), hdrs["Content-Range"].startswith("bytes 0-9/")), (206, 10, True), "range requests (Safari audio/video)")
+
+        st, r = self.upload(a, cid, "voice.webm", WEBM_VOICE, "audio/webm", "voice", duration="3.2")
+        self.assertEqual(st, 200, r)
+        v = r["message"]
+        self.assertEqual((v["kind"], v["media"]["dur"]), ("voice", 3.2))
+        st, hdrs, _ = self.fetch(b, v["media"]["url"])
+        self.assertEqual((st, hdrs["Content-Type"]), (200, "audio/webm"))
+        self.assertEqual(self.upload(a, cid, "v.webm", b"not audio", "audio/webm", "voice")[0], 400)
+
+        st, r = self.upload(a, cid, "Price list.txt", b"<script>alert(1)</script>", "text/plain", "file")
+        f = r["message"]
+        self.assertEqual((f["kind"], f["media"]["name"]), ("file", "Price list.txt"))
+        st, hdrs, body = self.fetch(b, f["media"]["url"])
+        self.assertEqual(hdrs["Content-Type"], "application/octet-stream", "documents download, never render")
+        self.assertIn("attachment", hdrs["Content-Disposition"])
+        self.assertIn("Price%20list.txt", hdrs["Content-Disposition"])
+
+        st, r = a.api("messages/location", {"chat": cid, "lat": 31.5204, "lng": 74.3587})
+        self.assertEqual((r["message"]["kind"], r["message"]["media"]["lat"]), ("location", 31.5204))
+        self.assertEqual(a.api("messages/location", {"chat": cid, "lat": 123, "lng": 0})[0], 400)
+
+        last = chat_of(b, cid)["last"]
+        self.assertEqual(last["text"], "📍 Location")
+
+    def test_jpeg_location_data_is_removed(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        buf = io.BytesIO()
+        img = Image.new("RGB", (3000, 1000), (200, 80, 40))
+        exif = Image.Exif()
+        exif[0x010F] = "SecretCameraMaker"
+        img.save(buf, "JPEG", exif=exif.tobytes())
+        raw = buf.getvalue()
+        self.assertIn(b"SecretCameraMaker", raw)
+        st, r = self.upload(self.a, self.cid, "camera.jpg", raw, "image/jpeg", "image")
+        m = r["message"]["media"]
+        self.assertEqual((m["w"], m["h"]), (2048, 683), "big photos are scaled down")
+        self.assertIn("&t=1", m["thumb"])
+        body = self.fetch(self.b, m["url"])[2]
+        self.assertNotIn(b"SecretCameraMaker", body, "camera metadata (incl. GPS) is stripped")
+        self.assertEqual(self.fetch(self.b, m["thumb"])[1]["Content-Type"], "image/jpeg")
+
+    def test_forward_and_delete_for_everyone(self):
+        a, b, c = self.a, self.b, self.c
+        cid_ac = a.api("chats/open", {"user_id": c.user["id"]})[1]["chat"]["id"]
+        img = self.upload(a, self.cid, "p.png", png_bytes(), "image/png", "image")[1]["message"]
+        st, r = a.api("messages/forward", {"id": img["id"], "chats": [cid_ac]})
+        self.assertEqual((st, r["count"]), (200, 1))
+        fwd = history(c, cid_ac)[-1]
+        self.assertTrue(fwd["forwarded"])
+        self.assertEqual(self.fetch(c, fwd["media"]["url"])[0], 200, "forwarded files open for the new chat")
+        self.assertEqual(c.api("messages/forward", {"id": img["id"], "chats": [cid_ac]})[0], 404, "can't forward what you can't see")
+
+        self.assertEqual(b.api("messages/delete", {"id": img["id"], "for": "everyone"})[0], 403, "only the sender")
+        self.assertEqual(a.api("messages/delete", {"id": img["id"], "for": "everyone"})[0], 200)
+        gone = [m for m in history(b, self.cid) if m["id"] == img["id"]][0]
+        self.assertEqual((gone["deleted"], gone["media"], gone["body"]), (True, None, ""))
+        self.assertEqual(self.fetch(b, img["media"]["url"])[0], 404)
+        self.assertEqual(self.fetch(c, fwd["media"]["url"])[0], 200, "the forwarded copy is not affected")
+
+        solo = self.upload(a, self.cid, "p.png", png_bytes(), "image/png", "image")[1]["message"]
+        a.api("messages/delete", {"id": solo["id"], "for": "everyone"})
+        self.assertEqual(self.fetch(a, solo["media"]["url"])[0], 404)
+
+    def test_profile_and_group_photos(self):
+        a, b = self.a, self.b
+        st, r = a.api("profile/photo", files={"file": ("me.png", png_bytes(), "image/png")})
+        self.assertEqual(st, 200, r)
+        url = r["user"]["avatar"]
+        self.assertTrue(url.startswith("media.php?a="))
+        st, hdrs, _ = self.fetch(b, url)
+        self.assertEqual((st, hdrs["Content-Type"]), (200, "image/jpeg"))
+        self.assertEqual(self.fetch(Client(), url)[0], 403)
+        self.assertEqual(chat_of(b, self.cid)["avatar"], url, "chat list shows the photo")
+        r = a.api("profile/photo", files={"file": ("x.txt", b"hello", "text/plain")})
+        self.assertEqual(r[0], 400)
+        st, r = a.api("profile/photo", files={}, fields={"remove": "1"})
+        self.assertEqual(r["user"]["avatar"], "")
+        self.assertEqual(self.fetch(b, url)[0], 404)
+
+        g = a.api("groups/create", {"title": "Pics", "user_ids": [b.user["id"]]})[1]["chat"]
+        st, info = a.api("groups/photo", files={"file": ("g.png", png_bytes(), "image/png")}, fields={"chat": g["id"]})
+        self.assertTrue(info["chat"]["avatar"])
+        self.assertEqual(b.api("groups/photo", files={"file": ("g.png", png_bytes(), "image/png")}, fields={"chat": g["id"]})[0], 403)
+
+
+class MessageActionTests(unittest.TestCase):
+    def test_reply_react_edit_delete(self):
+        a, b = users(2, "Act")
+        cid = a.api("chats/open", {"user_id": b.user["id"]})[1]["chat"]["id"]
+        useq = b.api("chats")[1]["useq"]
+        orig = a.api("messages/send", {"chat": cid, "body": "Do you have red roses?"})[1]["message"]
+
+        st, r = b.api("messages/send", {"chat": cid, "body": "Yes, 12 left", "reply_to": orig["id"]})
+        self.assertEqual(r["message"]["reply"]["id"], orig["id"])
+        self.assertEqual(r["message"]["reply"]["text"], "Do you have red roses?")
+        self.assertEqual(r["message"]["reply"]["sender_name"], "Act 0")
+
+        st, r = b.api("messages/react", {"id": orig["id"], "emoji": "👍"})
+        self.assertEqual(r["message"]["reactions"], [{"e": "👍", "u": [b.user["id"]]}])
+        a.api("messages/react", {"id": orig["id"], "emoji": "❤️"})
+        st, r = b.api("messages/react", {"id": orig["id"], "emoji": "❤️"})
+        self.assertEqual(r["message"]["reactions"], [{"e": "❤️", "u": [a.user["id"], b.user["id"]]}], "one reaction per person")
+        self.assertEqual(b.api("messages/react", {"id": orig["id"], "emoji": "hello"})[0], 422)
+        st, r = b.api("messages/react", {"id": orig["id"], "emoji": ""})
+        self.assertEqual(r["message"]["reactions"], [{"e": "❤️", "u": [a.user["id"]]}])
+
+        self.assertEqual(b.api("messages/edit", {"id": orig["id"], "body": "hacked"})[0], 403)
+        st, r = a.api("messages/edit", {"id": orig["id"], "body": "Do you have red or white roses?"})
+        self.assertEqual((r["message"]["edited"], r["message"]["body"]), (True, "Do you have red or white roses?"))
+
+        _, p = b.api("poll", query={"since": 10**9, "rsince": 0, "useq": useq})
+        upd = {m["id"]: m for m in p["updates"]}
+        self.assertEqual(upd[orig["id"]]["body"], "Do you have red or white roses?", "edits reach open apps")
+        self.assertGreater(p["useq"], useq)
+
+        b.api("messages/delete", {"id": orig["id"], "for": "me"})
+        self.assertNotIn(orig["id"], [m["id"] for m in history(b, cid)], "deleted for me")
+        self.assertIn(orig["id"], [m["id"] for m in history(a, cid)], "...but not for the other person")
+        a.api("messages/delete", {"id": orig["id"], "for": "everyone"})
+        m = [x for x in history(a, cid) if x["id"] == orig["id"]][0]
+        self.assertEqual((m["deleted"], m["body"], m["reactions"]), (True, "", []))
+        self.assertEqual(a.api("messages/edit", {"id": orig["id"], "body": "x"})[0], 403)
+        self.assertEqual(chat_of(a, cid)["last"]["text"], "Yes, 12 left")
+
+    def test_typing_settings_search_and_delete_chat(self):
+        a, b = users(2, "Set")
+        cid = a.api("chats/open", {"user_id": b.user["id"]})[1]["chat"]["id"]
+        a.api("messages/send", {"chat": cid, "body": "Invoice #42 is 100% paid"})
+        b.api("chats/typing", {"chat": cid})
+        _, p = a.api("poll", query={"since": 10**9, "rsince": 0})
+        self.assertIn({"chat": cid, "user_id": b.user["id"], "name": "Set 1"}, p["typing"])
+        self.assertEqual(chat_of(a, cid)["typing"][0]["name"], "Set 1")
+        b.api("messages/send", {"chat": cid, "body": "thanks"})
+        self.assertEqual(chat_of(a, cid)["typing"], [], "sending stops the typing indicator")
+
+        self.assertEqual(len(a.api("messages/search", query={"chat": cid, "q": "invoice"})[1]["messages"]), 1)
+        self.assertEqual(len(a.api("messages/search", query={"chat": cid, "q": "100%"})[1]["messages"]), 1)
+        self.assertEqual(len(a.api("messages/search", query={"chat": cid, "q": "0%_"})[1]["messages"]), 0, "% and _ are literal")
+
+        st, r = a.api("chats/settings", {"chat": cid, "pinned": True, "mute": "8h"})
+        self.assertEqual((r["chat"]["pinned"], r["chat"]["muted"]), (True, True))
+        st, r = a.api("chats/settings", {"chat": cid, "archived": True})
+        self.assertEqual((r["chat"]["archived"], r["chat"]["pinned"]), (True, False), "archiving unpins")
+        st, r = a.api("chats/settings", {"chat": cid, "archived": False, "mute": "off"})
+        self.assertEqual((r["chat"]["archived"], r["chat"]["muted"]), (False, False))
+        self.assertEqual(a.api("chats/settings", {"chat": cid, "mute": "forever-ish"})[0], 422)
+
+        others = users(3, "Pin")
+        for o in others:
+            oc = a.api("chats/open", {"user_id": o.user["id"]})[1]["chat"]["id"]
+            a.api("chats/settings", {"chat": oc, "pinned": True})
+        self.assertEqual(a.api("chats/settings", {"chat": cid, "pinned": True})[0], 422, "at most 3 pinned chats")
+
+        self.assertEqual(a.api("chats/delete", {"chat": cid})[0], 200)
+        self.assertNotIn(cid, [c["id"] for c in a.api("chats")[1]["chats"]])
+        new = b.api("messages/send", {"chat": cid, "body": "are you there?"})[1]["message"]
+        self.assertIn(cid, [c["id"] for c in a.api("chats")[1]["chats"]], "a new message brings the chat back")
+        self.assertEqual([m["id"] for m in history(a, cid)], [new["id"]], "with the old history cleared")
 
 
 class AccountDeletionTests(unittest.TestCase):

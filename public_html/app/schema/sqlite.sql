@@ -1,4 +1,9 @@
--- ChatSite schema for SQLite (local development and automated tests only).
+-- ChatSite schema (version 2) for SQLite (local development and automated tests only).
+
+CREATE TABLE IF NOT EXISTS meta (
+  k VARCHAR(40) NOT NULL PRIMARY KEY,
+  v VARCHAR(255) NOT NULL DEFAULT ''
+);
 
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6,6 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
   name VARCHAR(80) NOT NULL DEFAULT '',
   business_name VARCHAR(80) NOT NULL DEFAULT '',
   about VARCHAR(200) NOT NULL DEFAULT '',
+  avatar VARCHAR(40) NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL DEFAULT 0
 );
@@ -25,30 +31,76 @@ CREATE INDEX IF NOT EXISTS idx_otp_ip ON otp_codes (ip, created_at);
 
 CREATE TABLE IF NOT EXISTS conversations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_a INTEGER NOT NULL,
-  user_b INTEGER NOT NULL,
+  type VARCHAR(10) NOT NULL DEFAULT 'direct',
+  direct_key VARCHAR(50) NULL UNIQUE,
+  title VARCHAR(80) NOT NULL DEFAULT '',
+  description VARCHAR(500) NOT NULL DEFAULT '',
+  avatar VARCHAR(40) NOT NULL DEFAULT '',
   created_by INTEGER NOT NULL,
-  a_read_id INTEGER NOT NULL DEFAULT 0,
-  b_read_id INTEGER NOT NULL DEFAULT 0,
-  a_delivered_id INTEGER NOT NULL DEFAULT 0,
-  b_delivered_id INTEGER NOT NULL DEFAULT 0,
   last_message_id INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  receipt_at INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (user_a, user_b)
+  receipt_at INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_conv_b ON conversations (user_b);
+
+CREATE TABLE IF NOT EXISTS conversation_members (
+  conversation_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  role VARCHAR(10) NOT NULL DEFAULT 'member',
+  read_id INTEGER NOT NULL DEFAULT 0,
+  delivered_id INTEGER NOT NULL DEFAULT 0,
+  cleared_id INTEGER NOT NULL DEFAULT 0,
+  left_id INTEGER NOT NULL DEFAULT 0,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  pinned_at INTEGER NOT NULL DEFAULT 0,
+  muted_until INTEGER NOT NULL DEFAULT 0,
+  typing_at INTEGER NOT NULL DEFAULT 0,
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY (conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_members_user ON conversation_members (user_id);
 
 CREATE TABLE IF NOT EXISTS messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   conversation_id INTEGER NOT NULL,
   sender_id INTEGER NOT NULL,
+  kind VARCHAR(10) NOT NULL DEFAULT 'text',
   body TEXT NOT NULL,
+  media_key VARCHAR(40) NOT NULL DEFAULT '',
+  media TEXT NOT NULL,
+  reply_to INTEGER NOT NULL DEFAULT 0,
+  forwarded INTEGER NOT NULL DEFAULT 0,
+  edited_at INTEGER NOT NULL DEFAULT 0,
+  deleted_at INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages (conversation_id, id);
 CREATE INDEX IF NOT EXISTS idx_msg_sender ON messages (sender_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_msg_media ON messages (media_key);
+
+CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  emoji VARCHAR(32) NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (message_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS message_hidden (
+  message_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  PRIMARY KEY (message_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS message_updates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_updates_conv ON message_updates (conversation_id, id);
+CREATE INDEX IF NOT EXISTS idx_updates_time ON message_updates (created_at);
 
 CREATE TABLE IF NOT EXISTS blocks (
   blocker_id INTEGER NOT NULL,

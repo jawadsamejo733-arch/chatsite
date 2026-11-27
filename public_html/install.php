@@ -25,10 +25,13 @@ $checks = [
     ['cURL extension (sending SMS)', function_exists('curl_init'), 'Enable "curl" in cPanel → Select PHP Version → Extensions.'],
     ['Fileinfo extension (image uploads)', class_exists('finfo'), 'Enable "fileinfo" in cPanel → Select PHP Version → Extensions.'],
     ['mbstring extension', function_exists('mb_strlen'), 'Recommended: enable "mbstring" in cPanel → Select PHP Version → Extensions.'],
+    ['GD extension (photos, profile pictures)', function_exists('imagecreatetruecolor'), 'Recommended: enable "gd" in cPanel → Select PHP Version → Extensions.'],
+    ['EXIF extension (rotates phone photos correctly)', function_exists('exif_read_data'), 'Recommended: enable "exif" in cPanel → Select PHP Version → Extensions.'],
     ['storage/ folder is writable', is_writable(PUBLIC_DIR . '/storage'), 'In File Manager, set the permissions of the "storage" folder to 755.'],
     ['app/ folder is writable (to save config.php)', is_writable(APP_DIR), 'Set "app" to 755, or create app/config.php by hand (shown after install).'],
 ];
-$blocking = array_filter($checks, fn($c) => !$c[1] && !str_starts_with($c[0], 'mbstring') && !str_starts_with($c[0], 'app/'));
+$optional = ['mbstring', 'app/', 'GD ', 'EXIF '];
+$blocking = array_filter($checks, fn($c) => !$c[1] && !array_filter($optional, fn($o) => str_starts_with($c[0], $o)));
 
 $v = fn(string $k, string $d = '') => e($_POST[$k] ?? $d);
 

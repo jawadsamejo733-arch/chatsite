@@ -42,8 +42,10 @@ function default_config(): array
             'custom_unpacked_mb' => 30,
             'custom_files' => 300,
             'paste_kb' => 1500,
-            'image_mb' => 4,
+            'image_mb' => 4,          // photos on template mini-sites
             'media_files' => 200,
+            'photo_mb' => 10,         // photos sent in chats
+            'file_mb' => 15,          // videos, voice messages and documents (keep below upload_max_filesize)
         ],
     ];
 }
@@ -227,9 +229,10 @@ function send_security_headers(string $kind): void
     if ($kind === 'app') {
         header('X-Frame-Options: SAMEORIGIN');
         header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-            . "img-src 'self' data: blob:; frame-src 'self'; connect-src 'self'; object-src 'none'; "
+            . "img-src 'self' data: blob:; media-src 'self' blob:; frame-src 'self'; connect-src 'self'; object-src 'none'; "
             . "base-uri 'self'; form-action 'self'; frame-ancestors 'self'");
-        header('Permissions-Policy: camera=(), microphone=(), geolocation=()');
+        // Microphone for voice messages, location for "share location", camera for taking photos.
+        header('Permissions-Policy: camera=(self), microphone=(self), geolocation=(self)');
     }
 }
 

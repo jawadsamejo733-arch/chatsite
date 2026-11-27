@@ -6,8 +6,16 @@ When you open a chat with a business that has published a site, a **Website** ta
 your composer.
 
 - **Login with a phone number.** A 6-digit SMS code, no passwords. Supports Twilio or any HTTP SMS gateway.
-- **Chat is the core.** One-to-one messaging with sent ✓, delivered ✓✓ and read ticks, unread
-  badges, online/last seen, blocking, search, and infinite scroll back through history.
+- **Chat is the core**, with the everyday WhatsApp features:
+  - one-to-one chats and **groups** (name, photo, description, admins, add/remove people, exit group)
+  - **photos** (compressed, with phone-camera location data removed), **videos**, **documents**,
+    **voice messages** recorded in the app, and **sharing your location**
+  - **reply** to a message, **emoji reactions**, **edit** (15 minutes), **delete** for me or for
+    everyone (2 days; group admins can remove any message), **forward** to up to 5 chats, copy
+  - sent ✓, delivered ✓✓ and read ticks (in groups: read by everyone), **typing…**, online/last seen
+  - **pin** (up to 3), **mute** (8 hours / 1 week / always), **archive**, delete chat, block
+  - **search** inside a chat, unread markers, emoji picker, profile photos
+  - **notifications** with a sound while the app is open, including in a background tab
 - **Mini-sites are the add-on.** Merchants either fill in a template (Online shop, Restaurant menu,
   Services & booking, Profile & links) with photos, prices, hours and links, or use their own code.
   Every site also has a public link (`your-domain/s/<name>/`) to share anywhere.
@@ -84,6 +92,22 @@ Editor* can go higher.
   (`UPDATE sites SET published = 0 WHERE slug = 'the-name';`).
 - **Logs** are in `storage/logs/` (`error.log`, `php-error.log`). You can read them in File Manager;
   they are not reachable from the web.
+
+### What's built and what comes next
+
+| Phase | Features | Status |
+|---|---|---|
+| 1 | Groups, photos, videos, documents, voice messages, location, replies, reactions, edit, delete for everyone, forward, typing, profile photos, pin/mute/archive, search, in-app notifications | **Done** |
+| 2 | Notifications when the app is fully closed (Web Push), status/stories, disappearing messages, starred messages, link previews, "read by" info in groups, business tools (quick replies, greeting/away messages, labels) | Planned |
+| 3 | Voice and video calls (needs a calling service), instant delivery without polling (needs a real-time server or VPS), end-to-end encryption | Needs more than shared hosting |
+
+Notes:
+
+- Messages arrive within about 2.5 seconds (the app checks for new ones while it's open).
+- Voice messages are recorded in the browser's own format. iPhones record AAC, which every browser
+  plays. Android and desktop Chrome record WebM/Opus, which older iPhones may not
+  play. Converting audio would need a server tool such as ffmpeg, which shared hosting doesn't offer.
+- Photo features use the PHP **GD** and **EXIF** extensions. The installer checks for them.
 
 ### Before a public launch
 

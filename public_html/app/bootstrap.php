@@ -15,6 +15,7 @@ require APP_DIR . '/lib/helpers.php';
 require APP_DIR . '/lib/Db.php';
 require APP_DIR . '/lib/Sms.php';
 require APP_DIR . '/lib/Auth.php';
+require APP_DIR . '/lib/Media.php';
 require APP_DIR . '/lib/Chat.php';
 require APP_DIR . '/lib/Sites.php';
 

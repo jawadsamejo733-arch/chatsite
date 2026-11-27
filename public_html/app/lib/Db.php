@@ -28,8 +28,11 @@ final class Db
     {
         if (self::$pdo === null) {
             self::$pdo = self::connect((string)cfg('db.dsn'), (string)cfg('db.user'), (string)cfg('db.pass'));
-            if (cfg('auto_migrate')) {
+            // Upgrade the database once after new code is uploaded; a small marker file avoids checking on every request.
+            $marker = storage_path('schema-v' . self::SCHEMA_VERSION);
+            if (cfg('auto_migrate') || !is_file($marker)) {
                 self::migrate(self::$pdo);
+                @touch($marker);
             }
         }
         return self::$pdo;
@@ -70,10 +73,22 @@ final class Db
         return (int)self::pdo()->lastInsertId();
     }
 
+    private static int $depth = 0;
+
+    /** Runs $fn in a transaction. Nested calls join the outer transaction. */
     public static function tx(callable $fn): mixed
     {
         $pdo = self::pdo();
+        if (self::$depth > 0) {
+            self::$depth++;
+            try {
+                return $fn();
+            } finally {
+                self::$depth--;
+            }
+        }
         $pdo->beginTransaction();
+        self::$depth = 1;
         try {
             $result = $fn();
             $pdo->commit();
@@ -81,6 +96,8 @@ final class Db
         } catch (Throwable $e) {
             $pdo->rollBack();
             throw $e;
+        } finally {
+            self::$depth = 0;
         }
     }
 
@@ -89,15 +106,47 @@ final class Db
         return $e instanceof PDOException && in_array((string)$e->getCode(), ['23000', '23505'], true);
     }
 
-    /** Creates the tables if they do not exist yet. Safe to run repeatedly. */
+    public const SCHEMA_VERSION = 2;
+
+    /**
+     * Creates the tables on a fresh database, or upgrades an older one step by step.
+     * Safe to run repeatedly. Future versions add "if ($version < N) { ... }" steps below.
+     */
     public static function migrate(PDO $pdo): void
     {
-        $driver = self::driver($pdo);
-        $file = APP_DIR . '/schema/' . ($driver === 'sqlite' ? 'sqlite.sql' : 'mysql.sql');
-        $sql = (string)file_get_contents($file);
-        $sql = (string)preg_replace('/^\s*--.*$/m', '', $sql);
-        foreach (array_filter(array_map('trim', explode(';', $sql))) as $statement) {
-            $pdo->exec($statement);
+        if (!self::hasTable($pdo, 'users')) {
+            $driver = self::driver($pdo);
+            $file = APP_DIR . '/schema/' . ($driver === 'sqlite' ? 'sqlite.sql' : 'mysql.sql');
+            $sql = (string)file_get_contents($file);
+            $sql = (string)preg_replace('/^\s*--.*$/m', '', $sql);
+            foreach (array_filter(array_map('trim', explode(';', $sql))) as $statement) {
+                $pdo->exec($statement);
+            }
+            self::setVersion($pdo, self::SCHEMA_VERSION);
+            return;
         }
+        $version = self::hasTable($pdo, 'meta')
+            ? (int)($pdo->query("SELECT v FROM meta WHERE k = 'schema_version'")->fetchColumn() ?: 1)
+            : 1;
+        if ($version < 2) {
+            throw new RuntimeException('This database was created by a pre-release test version of ChatSite. '
+                . 'Create a new, empty database and run install.php again.');
+        }
+    }
+
+    private static function hasTable(PDO $pdo, string $table): bool
+    {
+        try {
+            $pdo->query('SELECT 1 FROM ' . $table . ' LIMIT 1');
+            return true;
+        } catch (PDOException) {
+            return false;
+        }
+    }
+
+    private static function setVersion(PDO $pdo, int $version): void
+    {
+        $pdo->prepare("DELETE FROM meta WHERE k = 'schema_version'")->execute();
+        $pdo->prepare("INSERT INTO meta (k, v) VALUES ('schema_version', ?)")->execute([(string)$version]);
     }
 }
