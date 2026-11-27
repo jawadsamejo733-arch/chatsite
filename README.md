@@ -1,0 +1,138 @@
+# ChatSite
+
+Phone-number chat for small businesses and their customers, with a **mini-website for every account**.
+When you open a chat with a business that has published a site, a **Website** tab appears next to
+**Chat**. The site opens right there, and its "Order in chat" buttons drop a ready-made message into
+your composer.
+
+- **Login with a phone number.** A 6-digit SMS code, no passwords. Supports Twilio or any HTTP SMS gateway.
+- **Chat is the core.** One-to-one messaging with sent ✓, delivered ✓✓ and read ticks, unread
+  badges, online/last seen, blocking, search, and infinite scroll back through history.
+- **Mini-sites are the add-on.** Merchants either fill in a template (Online shop, Restaurant menu,
+  Services & booking, Profile & links) with photos, prices, hours and links, or **upload their own
+  HTML/CSS/JS** as a `.zip`. Every site also has a public link (`your-domain/s/<name>/`) to share
+  anywhere.
+- **Built for GoDaddy cPanel hosting.** Plain PHP 8.1+ and MySQL, no Node.js, no build step, no
+  Composer. Upload, run the installer, done.
+
+## Security model (why uploaded code is safe)
+
+Merchants can upload any JavaScript, so every mini-site page and file is served with
+`Content-Security-Policy: sandbox …` (no `allow-same-origin`). The browser runs the site in a
+throwaway, unique origin, even when someone opens the link directly. It cannot read the app's
+session, messages or storage. It cannot make authenticated API calls (those need a CSRF token it
+can't see). It cannot navigate the app away from inside the chat tab. On top of that:
+
+- PHP, `.htaccess`, hidden files and path tricks (`../`) are rejected in uploads. Files are unpacked
+  into `storage/`, which the web server never serves or executes directly, and are streamed back
+  by `site.php`.
+- Login codes are HMAC-hashed and expire after 10 minutes. A code is locked after 5 wrong tries.
+  Requests are limited per number and per IP.
+- Sessions use HttpOnly + SameSite cookies, and every write needs a CSRF token. The app pages send
+  a strict CSP. `app/` and `storage/` are never served.
+
+## Deploy on GoDaddy (about 15 minutes)
+
+You need a **Linux Web Hosting (cPanel)** plan. The drag-and-drop "Websites + Marketing" builder
+cannot run PHP apps, and Windows/Plesk hosting won't read `.htaccess`.
+
+1. **Get the files.** Run `python3 scripts/build_zip.py`, or use a `chatsite-upload.zip`
+   you were given. It contains everything that belongs in `public_html`.
+2. **Upload.** GoDaddy → My Products → Web Hosting → **cPanel Admin** → **File Manager** →
+   open `public_html` (or a subfolder such as `public_html/chat`) → **Upload** the zip →
+   right-click it → **Extract** → delete the zip. Turn on *Settings → Show Hidden Files* to see
+   `.htaccess` and `.user.ini`.
+3. **PHP version.** cPanel → **Select PHP Version** (or *MultiPHP Manager*) → choose **8.1, 8.2 or
+   8.3**. Make sure the extensions `pdo_mysql`, `zip`, `curl`, `fileinfo` and `mbstring` are ticked.
+4. **Database.** cPanel → **MySQL® Databases**. Create a database, create a user with a strong
+   password, then *Add User To Database* with **ALL PRIVILEGES**. Note the full names (they start
+   with your cPanel username, e.g. `abc123_chat`).
+5. **SMS.** Create a [Twilio](https://www.twilio.com) account. Note the Account SID and Auth Token
+   and buy a number, or create a Messaging Service (better for sending abroad). SMS costs money per
+   message, and some countries require sender registration before messages arrive reliably, so check
+   with your provider for the countries you serve. Any other gateway with an HTTP API also works
+   (see `app/config.sample.php`).
+6. **Install.** Visit `https://your-domain/install.php` (or `/chat/install.php`). It checks the server,
+   creates the tables and writes `app/config.php`. Then **delete `install.php`**.
+7. **HTTPS.** Make sure SSL is active for your domain (cPanel → *SSL/TLS Status*). Then edit
+   `.htaccess` and remove the `#` in front of the two "Redirect everything to HTTPS" lines.
+8. **Try it.** Sign in with your phone, set up your profile, tap the 🏪 icon to build your mini-site,
+   publish it, and message yourself from a second phone.
+
+People can also add the app to their phone's home screen; it ships a web-app manifest.
+
+### Settings you may want to change later (`app/config.php`)
+
+| Setting | What it does |
+|---|---|
+| `app_name` | Name shown in the app, SMS and site footers |
+| `default_country_code` | Used when someone types a local number without `+` |
+| `sms` | Switch between `twilio`, `http` (any gateway) or `log` (testing only) |
+| `test_numbers` | Fixed codes for demo or reviewer accounts, no SMS sent |
+| `limits` | Message length, upload sizes, rate limits |
+
+Upload limits also depend on PHP. `.user.ini` raises them to 16 MB, and cPanel's *MultiPHP INI
+Editor* can go higher.
+
+### Running it day to day
+
+- **Back up** with cPanel → *Backup*: the database plus `storage/` (uploaded sites and images).
+- **Take down an abusive site:** phpMyAdmin → `sites` table → set `published` to `0`
+  (`UPDATE sites SET published = 0 WHERE slug = 'the-name';`).
+- **Logs** are in `storage/logs/` (`error.log`, `php-error.log`). You can read them in File Manager;
+  they are not reachable from the web.
+
+### Before a public launch
+
+These are business tasks the code can't do for you:
+
+- Publish **Terms of Service** and a **Privacy Policy** that cover phone numbers, messages and
+  user-uploaded sites, and give people a way to report abuse.
+- Messages are protected in transit by HTTPS and stored on your server. They are **not end-to-end
+  encrypted**, so say so in your privacy policy.
+- Chat updates by polling every 2.5 seconds, which is fine on shared hosting for a growing community.
+  When you have many hundreds of people online at once, move to a VPS. The same code runs there
+  unchanged.
+
+## Developing
+
+```bash
+# Run locally (SQLite, login codes shown on screen, no SMS)
+php -S localhost:8080 -t public_html dev/router.php
+
+# Tests: starts its own server; covers login, chat, receipts, blocking, sites, uploads and attacks
+python3 -m unittest discover -s tests -v
+
+# Same tests against a real Apache + MySQL install in development mode
+CHATSITE_TEST_URL=http://localhost/chat python3 -m unittest discover -s tests
+
+# Build the GoDaddy upload zip
+python3 scripts/build_zip.py
+```
+
+Structure:
+
+```
+chatsite/
+  public_html/            ← everything that goes on the server
+    index.php             app shell (single-page app)
+    api.php               JSON API  (api.php?r=chats, …)
+    site.php              serves mini-sites at /s/<name>/ with the sandbox header
+    install.php           one-time installer
+    assets/               app.js, app.css, icons (no build step)
+    app/                  PHP code, templates, schema (blocked from the web)
+    storage/              uploads, sessions, logs (blocked from the web)
+  dev/router.php          makes `php -S` behave like the .htaccess rules
+  tests/test_api.py       end-to-end tests (Python standard library only)
+  scripts/build_zip.py    builds dist/chatsite-upload.zip
+```
+
+### Custom-code sites: notes for merchants' developers
+
+- Put `index.html` at the top of the `.zip`. Sub-pages, CSS, JS, images, fonts, audio, video and
+  PDFs are fine. Server code is not.
+- Use relative links (`css/style.css`, not `/css/style.css`).
+- Sites run sandboxed, so cookies and `localStorage` are unavailable.
+- To let visitors message the business from any button, call `ChatSite.compose("I'd like to order …")`.
+  Inside the app this opens the chat with the text ready to send. On the public link it opens the app
+  and starts a chat with the business.

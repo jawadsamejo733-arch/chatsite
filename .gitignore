@@ -1,0 +1,8 @@
+# Never commit live data or secrets
+public_html/app/config.php
+public_html/storage/*
+!public_html/storage/.htaccess
+!public_html/storage/index.html
+dist/
+__pycache__/
+*.pyc
