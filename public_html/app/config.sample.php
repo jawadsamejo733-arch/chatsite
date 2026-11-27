@@ -58,6 +58,7 @@ return [
         'custom_upload_mb' => 10,     // also raise upload_max_filesize in .user.ini if you increase this
         'custom_unpacked_mb' => 30,
         'custom_files' => 300,
+        'paste_kb' => 1500,           // largest website code that can be pasted into the app
         'image_mb' => 4,
         'media_files' => 200,
     ],

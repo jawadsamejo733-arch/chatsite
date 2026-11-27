@@ -243,7 +243,7 @@ final class Sites
         $data = array_key_exists('data', $in) ? self::cleanData($in['data']) : (json_decode((string)$site['data'], true) ?: []);
         $published = !empty($in['published']);
         if ($published && $mode === 'custom' && (int)$site['custom_files'] === 0) {
-            throw new ApiError('Upload your website files before publishing.', 422);
+            throw new ApiError('Paste or upload your website code before publishing.', 422);
         }
         try {
             Db::run(
@@ -316,22 +316,72 @@ final class Sites
         }
         $name = strtolower((string)($file['name'] ?? ''));
         $tmp = (string)$file['tmp_name'];
+        if (preg_match('/\.html?$/', $name)) {
+            $html = (string)file_get_contents($tmp);
+            return self::installCustom($uid, fn(string $stage) => self::writeIndex($stage, $html), false);
+        }
+        if (!str_ends_with($name, '.zip')) {
+            throw new ApiError('Upload a .zip of your website, or a single .html file.');
+        }
+        return self::installCustom($uid, fn(string $stage) => self::extractZip($tmp, $stage), false);
+    }
+
+    /** Publishes code pasted into the app (typically written by ChatGPT, Claude, Gemini …) as index.html. */
+    public static function pasteCustom(int $uid, string $code, bool $publish): array
+    {
+        self::forUser($uid);
+        $html = self::cleanPasted($code);
+        return self::installCustom($uid, fn(string $stage) => self::writeIndex($stage, $html), $publish);
+    }
+
+    /** Keeps only the code when someone pastes a whole AI reply ("Here is your site: ```html … ``` Enjoy!"). */
+    public static function cleanPasted(string $code): string
+    {
+        if (!preg_match('//u', $code)) {
+            throw new ApiError("The code contains characters we can't read. Copy it again from your AI tool.");
+        }
+        $code = trim(str_replace(["\r\n", "\r"], "\n", $code));
+        if (preg_match('/```[A-Za-z]*[ \t]*\n(.*?)\n[ \t]*```/s', $code, $m) && str_contains($m[1], '<')) {
+            $code = trim($m[1]);
+        }
+        if ($code === '') {
+            throw new ApiError('Paste your website code first.');
+        }
+        if (!preg_match('/<\s*[a-z!]/i', $code)) {
+            throw new ApiError("That doesn't look like website code. Paste the HTML your AI tool gave you (it usually starts with <!DOCTYPE html>).");
+        }
+        $maxKb = (int)cfg('limits.paste_kb', 1500);
+        if (strlen($code) > $maxKb * 1024) {
+            throw new ApiError("That code is too long (max {$maxKb} KB). Upload it as a .zip instead.", 413);
+        }
+        return $code;
+    }
+
+    /** The current index.html, so pasted sites can be edited and re-published. */
+    public static function customCode(int $uid): array
+    {
+        $site = self::forUser($uid);
+        $file = self::dir($uid, 'custom') . '/index.html';
+        $html = is_file($file) && filesize($file) <= (int)cfg('limits.paste_kb', 1500) * 1024 ? (string)file_get_contents($file) : '';
+        return ['html' => $html, 'files' => (int)$site['custom_files']];
+    }
+
+    private static function writeIndex(string $stage, string $html): int
+    {
+        if (file_put_contents($stage . '/index.html', $html) === false) {
+            throw new ApiError('Could not save your site.', 500);
+        }
+        return 1;
+    }
+
+    /** Builds the new files in a staging folder, then swaps them in, so a failed upload never breaks the live site. */
+    private static function installCustom(int $uid, callable $fill, bool $publish): array
+    {
         $root = ensure_dir(self::dir($uid));
         $stage = $root . '/custom_new_' . random_hex(6);
         ensure_dir($stage);
-
         try {
-            if (preg_match('/\.html?$/', $name)) {
-                if (!copy($tmp, $stage . '/index.html')) {
-                    throw new ApiError('Could not save the file.', 500);
-                }
-                $count = 1;
-            } elseif (str_ends_with($name, '.zip')) {
-                $count = self::extractZip($tmp, $stage);
-            } else {
-                throw new ApiError('Upload a .zip of your website, or a single .html file.');
-            }
-
+            $count = (int)$fill($stage);
             $live = $root . '/custom';
             $old = $root . '/custom_old_' . random_hex(6);
             if (is_dir($live) && !rename($live, $old)) {
@@ -346,9 +396,11 @@ final class Sites
             delete_tree($stage);
             throw $e;
         }
-
-        Db::run('UPDATE sites SET mode = ?, custom_files = ?, custom_at = ?, updated_at = ? WHERE user_id = ?',
-            ['custom', $count, time(), time(), $uid]);
+        $now = time();
+        Db::run(
+            'UPDATE sites SET mode = ?, custom_files = ?, custom_at = ?, updated_at = ?' . ($publish ? ', published = 1' : '') . ' WHERE user_id = ?',
+            ['custom', $count, $now, $now, $uid]
+        );
         return Db::one('SELECT * FROM sites WHERE user_id = ?', [$uid]);
     }
 

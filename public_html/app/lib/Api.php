@@ -30,6 +30,8 @@ final class Api
             'POST site/preview' => [self::class, 'previewSite'],
             'POST site/image' => [self::class, 'uploadImage'],
             'POST site/upload' => [self::class, 'uploadCustom'],
+            'POST site/paste' => [self::class, 'pasteSite'],
+            'GET site/code' => [self::class, 'siteCode'],
             'POST site/remove-custom' => [self::class, 'removeCustom'],
             'GET site/check-slug' => [self::class, 'checkSlug'],
             'GET sites/resolve' => [self::class, 'resolveSite'],
@@ -228,6 +230,18 @@ final class Api
     private static function uploadCustom(array $user): array
     {
         return ['site' => Sites::present(Sites::uploadCustom((int)$user['id'], $_FILES['file'] ?? []))];
+    }
+
+    private static function pasteSite(array $user): array
+    {
+        $code = input('code', '');
+        $publish = input('publish', true);
+        return ['site' => Sites::present(Sites::pasteCustom((int)$user['id'], is_string($code) ? $code : '', $publish !== false))];
+    }
+
+    private static function siteCode(array $user): array
+    {
+        return Sites::customCode((int)$user['id']);
     }
 
     private static function removeCustom(array $user): array

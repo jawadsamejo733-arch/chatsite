@@ -451,6 +451,64 @@ class SiteTests(unittest.TestCase):
         st, r = o.api("site/remove-custom", method="POST")
         self.assertEqual((st, r["site"]["mode"], r["site"]["custom_files"]), (200, "template", 0))
 
+    def test_paste_code_from_ai_goes_live(self):
+        o = Client()
+        o.login(rand_phone(), "Paster", "Paste Shop " + uuid.uuid4().hex[:6])
+        slug = o.api("site")[1]["site"]["slug"]
+        ai_reply = (
+            "Sure! Here is your website:\n\n```html\n<!DOCTYPE html>\n<html><head><title>AI site</title></head>"
+            "<body><h1>Made by AI</h1><button onclick=\"ChatSite.compose('Hi! I\\'d like to order: Tea (Rs 100)')\">Order</button>"
+            "<script>localStorage.setItem('cart','1');document.body.dataset.ok=localStorage.getItem('cart');</script>"
+            "</body></html>\n```\n\nLet me know if you want changes!"
+        )
+        st, r = o.api("site/paste", {"code": ai_reply, "publish": True})
+        self.assertEqual(st, 200, r)
+        self.assertTrue(r["site"]["live"], "pasting publishes immediately")
+        self.assertEqual((r["site"]["mode"], r["site"]["custom_files"]), ("custom", 1))
+
+        st, hdrs, body = self.get(f"/s/{slug}/")
+        html = body.decode()
+        self.assertEqual(st, 200)
+        self.assertIn("sandbox allow-scripts", hdrs["Content-Security-Policy"])
+        self.assertTrue(html.startswith("<!DOCTYPE html>"), "the AI's chat text around the code is removed")
+        self.assertNotIn("Sure! Here is", html)
+        self.assertNotIn("```", html)
+        self.assertLess(html.index("window.ChatSite="), html.index("<h1>Made by AI"), "helpers load before the page's own code")
+        self.assertIn('"localStorage","sessionStorage"', html)
+
+        st, c = o.api("site/code")
+        self.assertTrue(c["html"].startswith("<!DOCTYPE html>"))
+        self.assertTrue(c["html"].endswith("</html>"))
+
+        st, r = o.api("site/paste", {"code": "just some words, no code"})
+        self.assertEqual(st, 400)
+        st, r = o.api("site/paste", {"code": "   "})
+        self.assertEqual(st, 400)
+        st, r = o.api("site/paste", {"code": "<p>" + "x" * (1600 * 1024) + "</p>"})
+        self.assertEqual(st, 413)
+        self.assertIn("Made by AI", self.get(f"/s/{slug}/")[2].decode(), "rejected pastes keep the live site")
+
+        o.api("site/paste", {"code": "<!doctype html><body><p>No head here</p></body>"})
+        html = self.get(f"/s/{slug}/")[2].decode()
+        self.assertTrue(html.lower().startswith("<!doctype html><script>"), "doctype stays first so the page isn't in quirks mode")
+
+        o.api("site/paste", {"code": "<p>Just a fragment</p>"})
+        html = self.get(f"/s/{slug}/")[2].decode()
+        self.assertTrue(html.startswith("<script>") and html.endswith("<p>Just a fragment</p>"))
+
+        zip_site = make_zip({"index.html": "<html><head></head><body>zip</body></html>", "style.css": "body{}"})
+        o.api("site/upload", files={"file": ("s.zip", zip_site, "application/zip")})
+        self.assertEqual(self.get(f"/s/{slug}/style.css")[0], 200)
+        o.api("site/paste", {"code": "<h1>Pasted again</h1>"})
+        self.assertEqual(self.get(f"/s/{slug}/style.css")[0], 404, "pasting replaces uploaded files")
+
+        other = Client()
+        other.login(rand_phone(), "Draft")
+        oslug = other.api("site")[1]["site"]["slug"]
+        st, r = other.api("site/paste", {"code": "<h1>draft</h1>", "publish": False})
+        self.assertFalse(r["site"]["live"])
+        self.assertEqual(self.get(f"/s/{oslug}/")[0], 404)
+
     def test_internal_folders_not_served(self):
         for path in ["/app/config.sample.php", "/app/schema/mysql.sql", "/storage/", "/app/lib/Auth.php", "/.htaccess", "/.user.ini"]:
             st, hdrs, body = self.get(path)

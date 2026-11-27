@@ -260,7 +260,7 @@ input[type=color] { width: 100%; height: 44px; border: 1px solid var(--line); bo
 .invite { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; padding: 12px; border: 1px dashed var(--line); border-radius: 16px; }
 
 /* toasts */
-.toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 100; width: max-content; max-width: calc(100% - 32px); }
+.toasts { position: fixed; left: 50%; bottom: calc(92px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 100; width: max-content; max-width: calc(100% - 32px); }
 .toast { background: #1c1f2c; color: #fff; padding: 11px 18px; border-radius: 14px; box-shadow: var(--shadow); font-weight: 550; font-size: 14px; animation: rise .2s ease-out; transition: opacity .35s, transform .35s; }
 .toast.bad { background: var(--bad); }
 .toast.out { opacity: 0; transform: translateY(8px); }
@@ -335,6 +335,13 @@ input[type=color] { width: 100%; height: 44px; border: 1px solid var(--line); bo
 .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
 .drop.busy { opacity: .6; pointer-events: none; }
 .ok-line { display: flex; align-items: center; gap: 8px; color: var(--ok); font-weight: 600; margin: 0; }
+.step { display: flex; align-items: center; gap: 10px; }
+.step-n { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 800; font-size: 13px; flex: none; }
+.prompt-box { margin: 0; padding: 12px 14px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 190px; overflow-y: auto; color: var(--muted); }
+textarea.code-box { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; min-height: 230px; white-space: pre; overflow: auto; tab-size: 2; resize: vertical; }
+.url-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+details > summary { cursor: pointer; font-weight: 650; list-style-position: inside; }
+details[open] > summary { margin-bottom: 12px; }
 .notes { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; color: var(--muted); font-size: 14px; }
 .editor-preview { border-left: 1px solid var(--line); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; align-items: center; background: var(--panel); }
 .device { width: 100%; max-width: 380px; flex: 1; min-height: 520px; border-radius: 30px; border: 10px solid #1c1f2c; overflow: hidden; background: #fff; box-shadow: var(--shadow); display: flex; }

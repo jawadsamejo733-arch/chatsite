@@ -901,8 +901,8 @@
         h('button', { class: d.mode === 'template' ? 'on' : '', onclick: () => { d.mode = 'template'; markDirty(); rerender(); refreshPreview(true); } },
           icon('layout'), h('span', {}, h('strong', { text: 'Use a template' }), h('small', { text: 'Fill in a form. Easiest.' }))),
         h('button', { class: d.mode === 'custom' ? 'on' : '', onclick: () => { d.mode = 'custom'; markDirty(); rerender(); refreshPreview(true); } },
-          icon('code'), h('span', {}, h('strong', { text: 'Upload my own code' }), h('small', { text: 'HTML, CSS & JavaScript' }))));
-      return [modeTabs, publishCard(), d.mode === 'custom' ? customSection(rerender) : templateSections(rerender)];
+          icon('code'), h('span', {}, h('strong', { text: 'Use my own code' }), h('small', { text: 'Paste from ChatGPT, Claude… or upload' }))));
+      return d.mode === 'custom' ? [modeTabs, customSection(), publishCard()] : [modeTabs, publishCard(), templateSections(rerender)];
     }
     rerender();
     return wrap;
@@ -1029,55 +1029,111 @@
       field('Description', bindText(it, 'description', { max: 400, multiline: true, rows: 2, placeholder: 'Size, ingredients, duration…' })));
   }
 
-  function customSection(rerender) {
-    const d = S.draft;
+  function aiPrompt() {
+    const name = (S.me && (S.me.business_name || S.me.name)) || 'my business';
+    return [
+      `Make a complete, beautiful, mobile-friendly one-page website for my business "${name}".`,
+      '',
+      'About us: [what you sell or do, your city, what makes you special]',
+      'Products or services with prices:',
+      '- [item] – [price]',
+      '- [item] – [price]',
+      'Opening hours: [hours]',
+      'Address: [address]',
+      'Style and colours: [for example: warm and friendly, green and white]',
+      '',
+      'Technical rules (important):',
+      '1. Give me ONE single HTML file with all the CSS and JavaScript inside it. Start with <!DOCTYPE html>.',
+      '2. Every "Order", "Book", "Buy" or "Contact" button must run ChatSite.compose("Hi! I\'d like to order: ITEM (PRICE)") when clicked, using the real item name and price. Do not use forms that send data to a server.',
+      '3. Do not use logins, databases, localStorage or cookies. For pictures use emoji, icons or CSS gradients.',
+      '4. Reply with only the code, no explanation.',
+    ].join('\n');
+  }
+
+  function applySavedSite(site) {
+    S.site = site;
+    S.draft = JSON.parse(JSON.stringify(site));
+    S.draft.dirty = false;
+    if (!S.draft.data.items) S.draft.data.items = [];
+    if (!S.draft.data.links) S.draft.data.links = [];
+    setMain(editorView());
+    refreshPreview(true);
+  }
+
+  function customSection() {
+    const liveUrl = location.origin + S.site.url;
+    const code = h('textarea', {
+      class: 'code-box', rows: 12, spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', wrap: 'off', 'aria-label': 'Website code',
+      placeholder: '<!DOCTYPE html>\n<html>\n  … paste the code from ChatGPT, Claude, Gemini …\n</html>',
+    });
+    if (S.site.custom_files) api('site/code').then((r) => { if (!code.value && r.html) code.value = r.html; }).catch(() => {});
+
+    const publishBtn = h('button', { class: 'btn primary', type: 'button' }, icon('upload'), 'Publish my site');
+    publishBtn.addEventListener('click', async () => {
+      if (!code.value.trim()) { code.focus(); toast('Paste your website code first', 'bad'); return; }
+      if (S.site.custom_files > 1 && !confirm('Publishing pasted code replaces the files you uploaded before. Continue?')) return;
+      busy(publishBtn, true, 'Publishing…');
+      try {
+        const r = await post('site/paste', { code: code.value, publish: true });
+        applySavedSite(r.site);
+        toast('Your site is live 🎉');
+      } catch (e) { busy(publishBtn, false); fail(e); }
+    });
+
     const input = h('input', { type: 'file', accept: '.zip,.html,.htm,application/zip,text/html', hidden: true });
     const drop = h('div', { class: 'drop', tabindex: 0, role: 'button', onclick: () => input.click(), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } } },
-      icon('upload'), h('strong', { text: S.site.custom_files ? 'Upload a new version' : 'Upload your website' }),
+      icon('upload'), h('strong', { text: 'Choose a file' }),
       h('small', { text: `A .zip with index.html at the top, or a single .html file · up to ${S.config.limits.custom_upload_mb} MB` }));
     const upload = async (f) => {
       if (!f) return;
-      if (f.size > S.config.limits.custom_upload_mb * 1024 * 1024) return toast(`Uploads can be up to ${S.config.limits.custom_upload_mb} MB`, 'bad');
+      if (f.size > S.config.limits.custom_upload_mb * 1024 * 1024) { toast(`Uploads can be up to ${S.config.limits.custom_upload_mb} MB`, 'bad'); return; }
       const fd = new FormData(); fd.append('file', f);
       drop.classList.add('busy');
       try {
         const r = await api('site/upload', { method: 'POST', form: fd });
-        const keep = { slug: d.slug, published: d.published };
-        S.site = r.site;
-        Object.assign(S.draft, JSON.parse(JSON.stringify(r.site)), keep, { mode: 'custom' });
-        toast(`Uploaded ${r.site.custom_files} file${r.site.custom_files === 1 ? '' : 's'}`);
-        rerender(); refreshPreview(true);
-      } catch (e) { fail(e); }
-      drop.classList.remove('busy');
+        applySavedSite(r.site);
+        toast(`Uploaded ${r.site.custom_files} file${r.site.custom_files === 1 ? '' : 's'}. Switch on "Publish my site" and save to go live.`);
+      } catch (e) { fail(e); drop.classList.remove('busy'); }
     };
     input.addEventListener('change', () => upload(input.files[0]));
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files[0]); });
 
+    const step = (n, title) => h('div', { class: 'step' }, h('span', { class: 'step-n', text: n }), h('h3', { text: title }));
     return h('div', { class: 'sections' },
-      h('div', { class: 'card' }, h('h3', { text: 'Your files' }),
+      h('div', { class: 'card' },
+        step('1', 'Get your code from AI'),
+        h('p', { class: 'fine', text: 'No coding needed. Copy this prompt into ChatGPT, Claude, Gemini or any AI chat, fill in the [brackets], and it writes your website for you.' }),
+        h('pre', { class: 'prompt-box', text: aiPrompt() }),
+        h('div', { class: 'row-gap' }, h('button', { class: 'btn', type: 'button', onclick: () => copyText(aiPrompt()) }, icon('copy'), 'Copy prompt'))),
+      h('div', { class: 'card' },
+        step('2', 'Paste it and publish'),
+        h('p', { class: 'fine', text: "Paste the AI's answer here. It's fine if it includes extra words; we keep just the code." }),
+        code,
+        h('div', { class: 'row-between' },
+          h('small', { class: 'muted url-note', text: 'Goes live at ' + liveUrl.replace(/^https?:\/\//, '') }),
+          publishBtn),
         S.site.custom_files
-          ? h('p', { class: 'ok-line' }, icon('check'), `${S.site.custom_files} file${S.site.custom_files === 1 ? '' : 's'} uploaded ${listTime(S.site.custom_at).toLowerCase()}`)
-          : h('p', { class: 'muted', text: 'Nothing uploaded yet.' }),
-        drop, input,
-        S.site.custom_files ? h('button', {
-          class: 'btn small link danger', type: 'button', text: 'Remove uploaded files and go back to templates',
-          onclick: async () => {
-            if (!confirm('Delete your uploaded files?')) return;
-            try {
-              const r = await post('site/remove-custom');
-              S.site = r.site; Object.assign(S.draft, JSON.parse(JSON.stringify(r.site)));
-              rerender(); refreshPreview(true);
-            } catch (e) { fail(e); }
-          },
-        }) : null),
-      h('div', { class: 'card' }, h('h3', { text: 'Developer notes' }),
+          ? h('p', { class: 'ok-line' }, icon('check'), (S.site.live ? 'Live · ' : 'Saved · ') + `updated ${listTime(S.site.custom_at).toLowerCase()}`)
+          : null),
+      h('div', { class: 'card' },
+        h('details', {},
+          h('summary', { text: 'Or upload files (.zip or .html)' }),
+          h('div', { class: 'stack' }, drop, input,
+            S.site.custom_files ? h('button', {
+              class: 'btn small link danger', type: 'button', text: 'Remove my code and go back to templates',
+              onclick: async () => {
+                if (!confirm('Delete your website code?')) return;
+                try { applySavedSite((await post('site/remove-custom')).site); } catch (e) { fail(e); }
+              },
+            }) : null))),
+      h('div', { class: 'card' }, h('h3', { text: 'Notes for developers' }),
         h('ul', { class: 'notes' },
-          h('li', {}, 'Put ', h('code', { text: 'index.html' }), ' at the top of the .zip. Other pages, CSS, JS, images, fonts, audio and video are fine.'),
-          h('li', {}, 'Use relative links (', h('code', { text: 'css/style.css' }), ', not ', h('code', { text: '/css/style.css' }), ').'),
-          h('li', {}, 'Server code (PHP etc.) is not allowed. Your site runs in a secure sandbox, so cookies and localStorage are unavailable.'),
-          h('li', {}, 'Let visitors message you from any button: ', h('code', { text: 'ChatSite.compose("I want to order …")' }), '. Inside the app it opens the chat with your text ready to send.'))));
+          h('li', {}, 'Any HTML, CSS and JavaScript works, including libraries from CDNs. Server code (PHP etc.) does not run.'),
+          h('li', {}, 'For several pages or your own images, upload a .zip with ', h('code', { text: 'index.html' }), ' at the top and use relative links (', h('code', { text: 'css/style.css' }), ').'),
+          h('li', {}, 'Let visitors message you from any button: ', h('code', { text: 'ChatSite.compose("I want to order …")' }), '.'),
+          h('li', {}, 'Sites run in a secure sandbox: localStorage and cookies work only until the page is closed.'))));
   }
 
   let previewTimer = null, previewSeq = 0;
@@ -1091,7 +1147,7 @@
         frame.removeAttribute('srcdoc');
         const src = S.site.preview_url || '';
         if (!src) {
-          frame.srcdoc = '<!doctype html><meta charset="utf-8"><body style="font:15px system-ui;display:grid;place-items:center;height:90vh;color:#888;text-align:center;padding:20px">Upload your files to see a preview here.</body>';
+          frame.srcdoc = '<!doctype html><meta charset="utf-8"><body style="font:15px system-ui;display:grid;place-items:center;height:90vh;color:#888;text-align:center;padding:20px">Paste your code and publish to see it here.</body>';
         } else if (frame.getAttribute('src') !== src) frame.setAttribute('src', src);
         return;
       }
@@ -1112,16 +1168,8 @@
     busy(btn, true, 'Saving…');
     try {
       const r = await post('site/save', { slug: d.slug, mode: d.mode, template: d.template, published: d.published, data: d.data });
-      S.site = r.site;
-      const saveBtn = d.saveBtn;
-      S.draft = JSON.parse(JSON.stringify(r.site));
-      S.draft.saveBtn = saveBtn;
-      S.draft.dirty = false;
-      busy(btn, false);
-      btn.textContent = 'Save';
+      applySavedSite(r.site);
       toast(r.site.live ? 'Saved — your site is live' : 'Saved as draft');
-      setMain(editorView());
-      refreshPreview(true);
     } catch (e) {
       busy(btn, false);
       fail(e);

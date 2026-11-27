@@ -41,6 +41,7 @@ function default_config(): array
             'custom_upload_mb' => 10,
             'custom_unpacked_mb' => 30,
             'custom_files' => 300,
+            'paste_kb' => 1500,
             'image_mb' => 4,
             'media_files' => 200,
         ],
@@ -264,7 +265,7 @@ function request_json(): array
         return $cache;
     }
     $raw = file_get_contents('php://input') ?: '';
-    if (strlen($raw) > 1_000_000) {
+    if (strlen($raw) > 4_000_000) {
         throw new ApiError('Request too large.', 413);
     }
     $data = $raw === '' ? [] : json_decode($raw, true);

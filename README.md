@@ -9,9 +9,12 @@ your composer.
 - **Chat is the core.** One-to-one messaging with sent ✓, delivered ✓✓ and read ticks, unread
   badges, online/last seen, blocking, search, and infinite scroll back through history.
 - **Mini-sites are the add-on.** Merchants either fill in a template (Online shop, Restaurant menu,
-  Services & booking, Profile & links) with photos, prices, hours and links, or **upload their own
-  HTML/CSS/JS** as a `.zip`. Every site also has a public link (`your-domain/s/<name>/`) to share
-  anywhere.
+  Services & booking, Profile & links) with photos, prices, hours and links, or use their own code.
+  Every site also has a public link (`your-domain/s/<name>/`) to share anywhere.
+- **Anyone can make a custom site with AI.** The app gives merchants a ready-made prompt to copy into
+  ChatGPT, Claude, Gemini or any AI chat. They paste the AI's answer back and tap **Publish**, and the
+  site is live. Extra chat text around the code is removed automatically. Developers can still upload
+  a `.zip` with several pages and images.
 - **Built for GoDaddy cPanel hosting.** Plain PHP 8.1+ and MySQL, no Node.js, no build step, no
   Composer. Upload, run the installer, done.
 
@@ -129,10 +132,12 @@ chatsite/
 
 ### Custom-code sites: notes for merchants' developers
 
-- Put `index.html` at the top of the `.zip`. Sub-pages, CSS, JS, images, fonts, audio, video and
-  PDFs are fine. Server code is not.
+- The simplest way: paste a single HTML file (all CSS and JS inside it) and tap **Publish**.
+- For several pages or your own images, upload a `.zip` and put `index.html` at the top. Sub-pages,
+  CSS, JS, images, fonts, audio, video and PDFs are fine. Server code is not.
 - Use relative links (`css/style.css`, not `/css/style.css`).
-- Sites run sandboxed, so cookies and `localStorage` are unavailable.
+- Sites run sandboxed. `localStorage`, `sessionStorage` and cookies are replaced with in-memory
+  versions, so code that uses them keeps working, but nothing is kept after the page closes.
 - To let visitors message the business from any button, call `ChatSite.compose("I'd like to order …")`.
   Inside the app this opens the chat with the text ready to send. On the public link it opens the app
   and starts a chat with the business.

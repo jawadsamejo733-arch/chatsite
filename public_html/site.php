@@ -127,12 +127,27 @@ if (in_array($ext, ['html', 'htm'], true)) {
     if (!(int)$site['published'] && !$preview) {
         site_error(404, 'Coming soon', 'This website has not been published yet.');
     }
-    // Give custom code the same "message the business" bridge the templates use: ChatSite.compose("text").
-    $bridge = '<script>window.ChatSite={compose:function(t){t=String(t||"");if(window.parent!==window){window.parent.postMessage({type:"chatsite:compose",text:t},"*")}else{location.href='
-        . json_encode(base_path(), JSON_HEX_TAG | JSON_UNESCAPED_SLASHES) . '+"#/to/"+' . json_encode($slug) . '+"?text="+encodeURIComponent(t)}}};</script>';
+    // Helpers injected into every custom page:
+    //  - The sandbox blocks localStorage, sessionStorage and cookies, which AI-written code often uses.
+    //    In-memory stand-ins keep those pages working instead of crashing.
+    //  - ChatSite.compose("text") opens the chat with the business, the same as the template buttons.
+    $bridge = '<script>(function(){'
+        . 'function m(){var d={};return{getItem:function(k){k=String(k);return Object.prototype.hasOwnProperty.call(d,k)?d[k]:null},'
+        . 'setItem:function(k,v){d[String(k)]=String(v)},removeItem:function(k){delete d[String(k)]},clear:function(){d={}},'
+        . 'key:function(i){return Object.keys(d)[i]||null},get length(){return Object.keys(d).length}}}'
+        . '["localStorage","sessionStorage"].forEach(function(n){try{window[n].getItem("x")}catch(e){try{Object.defineProperty(window,n,{value:m(),configurable:true})}catch(_){}}});'
+        . 'try{document.cookie}catch(e){try{var c="";Object.defineProperty(document,"cookie",{get:function(){return c},set:function(){},configurable:true})}catch(_){}}'
+        . 'window.ChatSite={compose:function(t){t=String(t||"");if(window.parent!==window){window.parent.postMessage({type:"chatsite:compose",text:t},"*")}else{location.href='
+        . json_encode(base_path(), JSON_HEX_TAG | JSON_UNESCAPED_SLASHES) . '+"#/to/"+' . json_encode($slug)
+        . '+"?text="+encodeURIComponent(t)}}};})();</script>';
     $html = (string)file_get_contents($file);
     $count = 0;
-    $html = (string)preg_replace_callback('/<head(\s[^>]*)?>/i', fn($mt) => $mt[0] . $bridge, $html, 1, $count);
+    foreach (['/<head(\s[^>]*)?>/i', '/<html(\s[^>]*)?>/i', '/^\s*<!doctype[^>]*>/i'] as $anchor) {
+        $html = (string)preg_replace_callback($anchor, fn($mt) => $mt[0] . $bridge, $html, 1, $count);
+        if ($count > 0) {
+            break;
+        }
+    }
     if ($count === 0) {
         $html = $bridge . $html;
     }
